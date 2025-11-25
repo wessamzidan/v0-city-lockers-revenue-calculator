@@ -53,6 +53,19 @@ export const TRANSFER_PERIODS = [
 ] as const
 
 /**
+ * UAE Airport destinations for luggage delivery
+ * Prices based on distance and service complexity
+ */
+export const UAE_AIRPORTS = [
+  { code: "DXB", name: "Dubai International Airport (DXB)", price: 149, distance: "City Center" },
+  { code: "DWC", name: "Dubai World Central / Al Maktoum (DWC)", price: 199, distance: "~45 km from Dubai" },
+  { code: "AUH", name: "Abu Dhabi International Airport (AUH)", price: 299, distance: "~130 km from Dubai" },
+  { code: "SHJ", name: "Sharjah International Airport (SHJ)", price: 179, distance: "~15 km from Dubai" },
+  { code: "RKT", name: "Ras Al Khaimah Int'l Airport (RKT)", price: 349, distance: "~100 km from Dubai" },
+  { code: "FJR", name: "Fujairah International Airport (FJR)", price: 399, distance: "~130 km from Dubai" },
+] as const
+
+/**
  * Locker specifications from CityLockers product catalog
  * Dimensions in cm (Width x Depth x Height)
  */
@@ -94,6 +107,11 @@ export const PRICING_REFERENCE = {
     starting: 149,
     note: "Up to 4 bags",
   },
+  delivery: {
+    basePriceNote: "Prices include up to 4 bags. Additional bags charged separately.",
+    disclaimer:
+      "Prices are subject to discussion between CityLockers and the partner. Above are default reference prices.",
+  },
 } as const
 
 // ============================================================================
@@ -112,6 +130,7 @@ export const DEFAULT_STATE = {
   revenueShare: 20,
   totalKeys: 150,
   avgDailyTraffic: 45,
+  numberOfProperties: 1, // Number of properties in cluster
   lockerM: { qty: 3, price: 20, occupancy: 60 },
   lockerL: { qty: 5, price: 30, occupancy: 55 },
   lockerXL: { qty: 6, price: 40, occupancy: 50 },
@@ -125,14 +144,28 @@ export const DEFAULT_STATE = {
     price: 50,
     isPortfolio: false,
   },
+  deliveryEnabled: false,
+  delivery: {
+    selectedAirport: "DXB",
+    volume: 5,
+    period: 52, // Per week
+    customPrice: null as number | null,
+    scope: "per-property" as "per-property" | "total", // Whether volume is per property or total across all
+  },
 } as const
 
-export type AppState = typeof DEFAULT_STATE
+export type AppState = typeof DEFAULT_STATE & {
+  delivery: {
+    selectedAirport: string
+    volume: number
+    period: number
+    customPrice: number | null
+    scope: "per-property" | "total"
+  }
+}
 
-/**
- * Saved scenario structure for localStorage persistence
- */
-export type Scenario = {
+// Declare Scenario type
+interface Scenario {
   name: string
   date: string
   data: AppState
@@ -203,31 +236,50 @@ export const calculateFinancials = (state: AppState) => {
     scooters,
     transfersEnabled,
     transfers,
+    deliveryEnabled,
+    delivery,
     contractTerm,
+    numberOfProperties,
   } = state
 
-  // Calculate daily locker revenue by size
-  const dailyRevM = calculateLockerRevenue(lockerM.qty, lockerM.price, lockerM.occupancy, locationFactor)
-  const dailyRevL = calculateLockerRevenue(lockerL.qty, lockerL.price, lockerL.occupancy, locationFactor)
-  const dailyRevXL = calculateLockerRevenue(lockerXL.qty, lockerXL.price, lockerXL.occupancy, locationFactor)
-  const dailyLockerGross = dailyRevM + dailyRevL + dailyRevXL
+  // Ensure numberOfProperties is at least 1
+  const propertyCount = Math.max(1, numberOfProperties)
 
-  // Calculate scooter revenue if enabled
+  const dailyRevMPerProperty = calculateLockerRevenue(lockerM.qty, lockerM.price, lockerM.occupancy, locationFactor)
+  const dailyRevLPerProperty = calculateLockerRevenue(lockerL.qty, lockerL.price, lockerL.occupancy, locationFactor)
+  const dailyRevXLPerProperty = calculateLockerRevenue(lockerXL.qty, lockerXL.price, lockerXL.occupancy, locationFactor)
+  const dailyLockerGrossPerProperty = dailyRevMPerProperty + dailyRevLPerProperty + dailyRevXLPerProperty
+
+  // Multiply by number of properties for total
+  const dailyLockerGross = dailyLockerGrossPerProperty * propertyCount
+
   let dailyScooterGross = 0
   if (scootersEnabled) {
-    dailyScooterGross =
+    const dailyScooterPerProperty =
       scooters.units * scooters.hourlyRate * scooters.utilization * locationFactor * SEASONALITY_FACTOR
+    dailyScooterGross = dailyScooterPerProperty * propertyCount
   }
 
-  // Calculate transfer revenue if enabled
   let dailyTransferGross = 0
   if (transfersEnabled) {
     const dailyVolume = transfers.volume * (transfers.period / 365)
-    dailyTransferGross = dailyVolume * transfers.price * SEASONALITY_FACTOR
+    const dailyTransferBase = dailyVolume * transfers.price * SEASONALITY_FACTOR
+    // If portfolio, the volume is already total; otherwise multiply by properties
+    dailyTransferGross = transfers.isPortfolio ? dailyTransferBase : dailyTransferBase * propertyCount
+  }
+
+  let dailyDeliveryGross = 0
+  if (deliveryEnabled) {
+    const airport = UAE_AIRPORTS.find((a) => a.code === delivery.selectedAirport)
+    const price = delivery.customPrice ?? airport?.price ?? 149
+    const dailyVolume = delivery.volume * (delivery.period / 365)
+    const dailyDeliveryBase = dailyVolume * price * SEASONALITY_FACTOR
+    // If scope is "total", volume is already total; otherwise multiply by properties
+    dailyDeliveryGross = delivery.scope === "total" ? dailyDeliveryBase : dailyDeliveryBase * propertyCount
   }
 
   // Aggregate totals
-  const totalDailyGross = dailyLockerGross + dailyScooterGross + dailyTransferGross
+  const totalDailyGross = dailyLockerGross + dailyScooterGross + dailyTransferGross + dailyDeliveryGross
   const totalAnnualGross = totalDailyGross * 365
 
   // Calculate partner's share (NET figures)
@@ -242,12 +294,14 @@ export const calculateFinancials = (state: AppState) => {
     lockers: (dailyLockerGross / totalGross) * 100,
     scooters: (dailyScooterGross / totalGross) * 100,
     transfers: (dailyTransferGross / totalGross) * 100,
+    delivery: (dailyDeliveryGross / totalGross) * 100,
   }
 
   return {
     dailyLockerGross,
     dailyScooterGross,
     dailyTransferGross,
+    dailyDeliveryGross,
     totalDailyGross,
     totalAnnualGross,
     partnerDaily,
@@ -255,6 +309,7 @@ export const calculateFinancials = (state: AppState) => {
     partnerAnnual,
     partnerContract,
     mix,
+    propertyCount,
   }
 }
 
@@ -296,7 +351,7 @@ const CityLockersContext = createContext<CityLockersContextType | undefined>(und
  * @param children - Child components to wrap
  */
 export function CityLockersProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AppState>(DEFAULT_STATE)
+  const [state, setState] = useState<AppState>({ ...DEFAULT_STATE })
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [isHydrated, setIsHydrated] = useState(false)
 
@@ -305,9 +360,22 @@ export function CityLockersProvider({ children }: { children: ReactNode }) {
     const savedState = localStorage.getItem("citylockers_current_state")
     if (savedState) {
       try {
-        setState(JSON.parse(savedState))
+        const parsed = JSON.parse(savedState)
+        // This handles cases where new properties are added in updates
+        setState({
+          ...DEFAULT_STATE,
+          ...parsed,
+          // Deep merge nested objects
+          lockerM: { ...DEFAULT_STATE.lockerM, ...parsed.lockerM },
+          lockerL: { ...DEFAULT_STATE.lockerL, ...parsed.lockerL },
+          lockerXL: { ...DEFAULT_STATE.lockerXL, ...parsed.lockerXL },
+          scooters: { ...DEFAULT_STATE.scooters, ...parsed.scooters },
+          transfers: { ...DEFAULT_STATE.transfers, ...parsed.transfers },
+          delivery: { ...DEFAULT_STATE.delivery, ...parsed.delivery },
+        })
       } catch (e) {
         console.error("Failed to load state from localStorage:", e)
+        setState({ ...DEFAULT_STATE })
       }
     }
 

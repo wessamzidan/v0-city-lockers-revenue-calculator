@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button"
 import {
   Briefcase,
   Box,
-  Truck,
   Bike,
   LayoutDashboard,
   Maximize,
@@ -16,6 +15,8 @@ import {
   TrendingUp,
   Shield,
   Zap,
+  Plane,
+  Building2,
 } from "lucide-react"
 import Link from "next/link"
 
@@ -41,9 +42,17 @@ export default function DashboardPage() {
             <h2 className="text-lg font-medium text-gray-500 uppercase tracking-wider">
               Estimated Partner Annual Income (Net)
             </h2>
-            <span className="inline-block bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full mt-2 border border-green-200">
-              Zero Capex - Zero Opex Model
-            </span>
+            <div className="flex items-center gap-2 mt-2">
+              <span className="inline-block bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full border border-green-200">
+                Zero Capex - Zero Opex Model
+              </span>
+              {state.numberOfProperties > 1 && (
+                <span className="inline-flex items-center gap-1 bg-orange-100 text-orange-800 text-xs font-bold px-3 py-1 rounded-full border border-orange-200">
+                  <Building2 className="w-3 h-3" />
+                  {state.numberOfProperties} Properties
+                </span>
+              )}
+            </div>
           </div>
           <div className="text-5xl md:text-7xl font-extrabold text-gray-900 tracking-tight mb-6">
             {CURRENCY} {financials.partnerAnnual.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -165,6 +174,7 @@ export default function DashboardPage() {
               </div>
               <p className="text-xs text-right text-gray-400">
                 {CURRENCY} {financials.dailyLockerGross.toFixed(0)} / day
+                {state.numberOfProperties > 1 && ` (${state.numberOfProperties} properties)`}
               </p>
             </div>
 
@@ -189,18 +199,18 @@ export default function DashboardPage() {
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="flex items-center gap-2">
-                  <Truck className="w-4 h-4 text-purple-500" /> Transfers
+                  <Plane className="w-4 h-4 text-purple-500" /> Delivery
                 </span>
-                <span className="font-bold">{financials.mix.transfers.toFixed(1)}%</span>
+                <span className="font-bold">{(financials.mix.transfers + financials.mix.delivery).toFixed(1)}%</span>
               </div>
               <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-purple-500 transition-all duration-500"
-                  style={{ width: `${financials.mix.transfers}%` }}
+                  style={{ width: `${financials.mix.transfers + financials.mix.delivery}%` }}
                 />
               </div>
               <p className="text-xs text-right text-gray-400">
-                {CURRENCY} {financials.dailyTransferGross.toFixed(0)} / day
+                {CURRENCY} {(financials.dailyTransferGross + financials.dailyDeliveryGross).toFixed(0)} / day
               </p>
             </div>
           </CardContent>
@@ -234,10 +244,20 @@ export default function DashboardPage() {
               <div className="w-full space-y-2 text-sm">
                 <div className="flex justify-between border-b pb-2">
                   <span className="text-gray-600">Total Units (14 lockers/unit)</span>
-                  <span className="font-mono font-bold">{spaceMetrics.unitsNeeded}</span>
+                  <span className="font-mono font-bold">
+                    {spaceMetrics.unitsNeeded}
+                    {state.numberOfProperties > 1 && (
+                      <span className="text-gray-400 font-normal">
+                        {" "}
+                        x{state.numberOfProperties} = {spaceMetrics.unitsNeeded * state.numberOfProperties}
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="flex justify-between border-b pb-2">
-                  <span className="text-gray-600">Available Space</span>
+                  <span className="text-gray-600">
+                    Available Space {state.numberOfProperties > 1 && "(per property)"}
+                  </span>
                   <span className="font-mono font-bold">{state.availableWallSpace}m</span>
                 </div>
                 <div className="flex justify-between pt-1">
@@ -265,7 +285,10 @@ export default function DashboardPage() {
               <h3 className="text-2xl font-bold mt-2 text-[#FF9900]">
                 {CURRENCY} {financials.partnerContract.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </h3>
-              <p className="text-xs text-gray-500 mt-1">Over {state.contractTerm} years</p>
+              <p className="text-xs text-gray-500 mt-1">
+                Over {state.contractTerm} years
+                {state.numberOfProperties > 1 && ` across ${state.numberOfProperties} properties`}
+              </p>
             </div>
             <div className="p-3 rounded-full bg-orange-50">
               <Briefcase className="w-6 h-6 text-[#FF9900]" />
