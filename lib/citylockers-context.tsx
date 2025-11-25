@@ -1,0 +1,276 @@
+"use client"
+
+import type React from "react"
+
+import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+
+// Seasonality Multiplier: (5mo * 1.15 + 1mo * 0.85 + 6mo * 1.0) / 12
+export const SEASONALITY_FACTOR = (5 * 1.15 + 1 * 0.85 + 6 * 1.0) / 12
+export const CURRENCY = "AED"
+export const PRIMARY_COLOR = "#FF9900"
+
+export const LOCATIONS = [
+  { label: "Standard City", value: 1.0 },
+  { label: "Tourist Hub", value: 1.5 },
+  { label: "Downtown", value: 1.2 },
+  { label: "Transit Zone", value: 1.3 },
+  { label: "Remote Area", value: 0.8 },
+]
+
+export const PROPERTY_TYPES = [
+  { label: "Hospitality (Hotel)", value: "hotel" },
+  { label: "Residential", value: "residential" },
+  { label: "Commercial (Mall)", value: "commercial" },
+  { label: "Entertainment Venue", value: "entertainment" },
+  { label: "Waterpark", value: "waterpark" },
+]
+
+export const TRANSFER_PERIODS = [
+  { label: "Per Day", value: 365 },
+  { label: "Per Week", value: 52 },
+  { label: "Per Month", value: 12 },
+]
+
+// Locker specifications from CityLockers proposal
+export const LOCKER_SPECS = {
+  hospitality: {
+    XL: { dimensions: "48cm x 55cm x 85cm", fits: "Large suitcases, oversized bags, golf bags" },
+    L: { dimensions: "48cm x 33cm x 85cm", fits: "Medium suitcases, carry-on bags, backpacks" },
+    M: { dimensions: "48cm x 28cm x 58cm", fits: "Small bags, laptops, personal items" },
+  },
+  residential: {
+    XL: { dimensions: "47cm x 85cm x 51cm", fits: "Large packages, bulk deliveries" },
+    M: { dimensions: "47cm x 30cm x 51cm", fits: "Standard packages, parcels" },
+    S: { dimensions: "47cm x 20cm x 51cm", fits: "Small packages, documents" },
+    Laundry: { dimensions: "35cm x 200cm x 51cm", fits: "Laundry bags, garment bags" },
+  },
+  scooter: {
+    Scooter: { dimensions: "50cm x 140cm x 70cm", fits: "E-scooter with secure mount & charging" },
+    Accessories: { dimensions: "50cm x 33cm x 70cm", fits: "Helmet, charger, accessories" },
+  },
+  entertainment: {
+    Standard: { dimensions: "35cm x 35cm x 35cm", fits: "Bags, jackets, personal items" },
+  },
+}
+
+// Pricing reference (AED)
+export const PRICING_REFERENCE = {
+  luggage: {
+    M: { "3hr": 9, "6hr": 16, "12hr": 19, "24hr": 32, "7day": 128 },
+    L: { "3hr": 13, "6hr": 19, "12hr": 26, "24hr": 38, "7day": 152 },
+    XL: { "3hr": 16, "6hr": 26, "12hr": 31, "24hr": 44, "7day": 176 },
+  },
+  scooter: {
+    hourly: 1.13,
+    monthly: 149,
+  },
+  transfer: {
+    starting: 149,
+    note: "Up to 4 bags",
+  },
+}
+
+export const DEFAULT_STATE = {
+  clientName: "New Client",
+  propertyType: "hotel",
+  locationFactor: 1.2,
+  contractTerm: 5,
+  revenueShare: 20,
+  totalKeys: 150,
+  avgDailyTraffic: 45,
+  lockerM: { qty: 3, price: 20, occupancy: 60 },
+  lockerL: { qty: 5, price: 30, occupancy: 55 },
+  lockerXL: { qty: 6, price: 40, occupancy: 50 },
+  availableWallSpace: 5,
+  scootersEnabled: false,
+  scooters: { units: 5, hourlyRate: 15, utilization: 4 },
+  transfersEnabled: false,
+  transfers: {
+    volume: 10,
+    period: 365,
+    price: 50,
+    isPortfolio: false,
+  },
+}
+
+export type AppState = typeof DEFAULT_STATE
+export type Scenario = { name: string; date: string; data: AppState }
+
+interface CityLockersContextType {
+  state: AppState
+  setState: React.Dispatch<React.SetStateAction<AppState>>
+  scenarios: Scenario[]
+  setScenarios: React.Dispatch<React.SetStateAction<Scenario[]>>
+  updateState: (path: string, value: any) => void
+  saveScenario: (name?: string) => void
+  loadScenario: (data: AppState) => void
+  deleteScenario: (index: number) => void
+  financials: ReturnType<typeof calculateFinancials>
+  spaceMetrics: ReturnType<typeof calculateSpaceUtilization>
+}
+
+export const calculateLockerRevenue = (qty: number, price: number, occupancy: number, locationFactor: number) => {
+  return price * qty * (occupancy / 100) * locationFactor * SEASONALITY_FACTOR
+}
+
+export const calculateSpaceUtilization = (m: number, l: number, xl: number) => {
+  const totalLockers = m + l + xl
+  const unitsNeeded = Math.ceil(totalLockers / 14)
+  const widthNeeded = (totalLockers / 14) * 2.2
+  return { totalLockers, widthNeeded, unitsNeeded }
+}
+
+export const calculateFinancials = (state: AppState) => {
+  const {
+    lockerM,
+    lockerL,
+    lockerXL,
+    locationFactor,
+    revenueShare,
+    scootersEnabled,
+    scooters,
+    transfersEnabled,
+    transfers,
+    contractTerm,
+  } = state
+
+  const dailyRevM = calculateLockerRevenue(lockerM.qty, lockerM.price, lockerM.occupancy, locationFactor)
+  const dailyRevL = calculateLockerRevenue(lockerL.qty, lockerL.price, lockerL.occupancy, locationFactor)
+  const dailyRevXL = calculateLockerRevenue(lockerXL.qty, lockerXL.price, lockerXL.occupancy, locationFactor)
+  const dailyLockerGross = dailyRevM + dailyRevL + dailyRevXL
+
+  let dailyScooterGross = 0
+  if (scootersEnabled) {
+    dailyScooterGross =
+      scooters.units * scooters.hourlyRate * scooters.utilization * locationFactor * SEASONALITY_FACTOR
+  }
+
+  let dailyTransferGross = 0
+  if (transfersEnabled) {
+    const dailyVolume = transfers.volume * (transfers.period / 365)
+    dailyTransferGross = dailyVolume * transfers.price * SEASONALITY_FACTOR
+  }
+
+  const totalDailyGross = dailyLockerGross + dailyScooterGross + dailyTransferGross
+  const totalAnnualGross = totalDailyGross * 365
+
+  const partnerDaily = totalDailyGross * (revenueShare / 100)
+  const partnerMonthly = partnerDaily * 30
+  const partnerAnnual = totalAnnualGross * (revenueShare / 100)
+  const partnerContract = partnerAnnual * contractTerm
+
+  const totalGross = Math.max(totalDailyGross, 0.01)
+  const mix = {
+    lockers: (dailyLockerGross / totalGross) * 100,
+    scooters: (dailyScooterGross / totalGross) * 100,
+    transfers: (dailyTransferGross / totalGross) * 100,
+  }
+
+  return {
+    dailyLockerGross,
+    dailyScooterGross,
+    dailyTransferGross,
+    totalDailyGross,
+    totalAnnualGross,
+    partnerDaily,
+    partnerMonthly,
+    partnerAnnual,
+    partnerContract,
+    mix,
+  }
+}
+
+const CityLockersContext = createContext<CityLockersContextType | undefined>(undefined)
+
+export function CityLockersProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<AppState>(DEFAULT_STATE)
+  const [scenarios, setScenarios] = useState<Scenario[]>([])
+
+  useEffect(() => {
+    const saved = localStorage.getItem("citylockers_current_state")
+    if (saved) {
+      try {
+        setState(JSON.parse(saved))
+      } catch (e) {
+        console.error("Failed to load state", e)
+      }
+    }
+    const savedScenarios = localStorage.getItem("citylockers_scenarios")
+    if (savedScenarios) {
+      try {
+        setScenarios(JSON.parse(savedScenarios))
+      } catch (e) {
+        console.error("Failed to load scenarios", e)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("citylockers_current_state", JSON.stringify(state))
+  }, [state])
+
+  const updateState = (path: string, value: any) => {
+    setState((prev) => {
+      const newState = { ...prev }
+      const parts = path.split(".")
+      if (parts.length === 1) {
+        ;(newState as any)[parts[0]] = value
+      } else {
+        let current = newState as any
+        for (let i = 0; i < parts.length - 1; i++) {
+          current[parts[i]] = { ...current[parts[i]] }
+          current = current[parts[i]]
+        }
+        current[parts[parts.length - 1]] = value
+      }
+      return newState
+    })
+  }
+
+  const saveScenario = (name?: string) => {
+    const scenarioName = name || `${state.clientName} - ${new Date().toLocaleDateString()}`
+    const newScenarios = [...scenarios, { name: scenarioName, date: new Date().toISOString(), data: state }]
+    setScenarios(newScenarios)
+    localStorage.setItem("citylockers_scenarios", JSON.stringify(newScenarios))
+  }
+
+  const loadScenario = (data: AppState) => {
+    setState(data)
+  }
+
+  const deleteScenario = (index: number) => {
+    const newScenarios = scenarios.filter((_, i) => i !== index)
+    setScenarios(newScenarios)
+    localStorage.setItem("citylockers_scenarios", JSON.stringify(newScenarios))
+  }
+
+  const financials = calculateFinancials(state)
+  const spaceMetrics = calculateSpaceUtilization(state.lockerM.qty, state.lockerL.qty, state.lockerXL.qty)
+
+  return (
+    <CityLockersContext.Provider
+      value={{
+        state,
+        setState,
+        scenarios,
+        setScenarios,
+        updateState,
+        saveScenario,
+        loadScenario,
+        deleteScenario,
+        financials,
+        spaceMetrics,
+      }}
+    >
+      {children}
+    </CityLockersContext.Provider>
+  )
+}
+
+export function useCityLockers() {
+  const context = useContext(CityLockersContext)
+  if (context === undefined) {
+    throw new Error("useCityLockers must be used within a CityLockersProvider")
+  }
+  return context
+}
